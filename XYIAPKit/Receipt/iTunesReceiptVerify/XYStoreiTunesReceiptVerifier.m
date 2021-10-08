@@ -20,9 +20,21 @@ NSString *const XYCachePreferenceKeyPrefix = @"xy_cache_pre_key_prefix";
 
 @property (nonatomic, strong) NSMutableDictionary *verifiedReceipts;
 
+@property (nonatomic, strong) NSURLSession *session;
+
 @end
 
 @implementation XYStoreiTunesReceiptVerifier
+
+- (instancetype)init {
+    if (self = [super init]) {
+        NSURLSessionConfiguration *configuration = [NSURLSessionConfiguration defaultSessionConfiguration];
+
+        _session = [NSURLSession sessionWithConfiguration:configuration delegate:nil delegateQueue:[NSOperationQueue mainQueue]];
+
+    }
+    return self;
+}
 
 + (instancetype)shareInstance
 {
@@ -173,44 +185,80 @@ NSString *const XYCachePreferenceKeyPrefix = @"xy_cache_pre_key_prefix";
     request.HTTPMethod = requestMethod;
     
     __weak typeof(self) weakSelf = self;
-    dispatch_async(dispatch_get_global_queue( DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        NSError *error;
-        NSData *data = [NSURLConnection sendSynchronousRequest:request returningResponse:nil error:&error];
-        dispatch_async(dispatch_get_main_queue(), ^{
-            
-            if (!data) {
-                NSError *wrapperError = [weakSelf unableVerifyReceiptError:error];
-                if (failureBlock != nil) failureBlock(wrapperError);
-                return;
-            }
-            
-            NSError *jsonError;
-            NSDictionary *responseJSON = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
-            if (!responseJSON) {
-                NSLog(@"Failed To Parse Server Response");
-                if (failureBlock != nil) failureBlock(jsonError);
-            }
-            
-            static NSString *statusKey = @"status";
-            NSInteger statusCode = [responseJSON[statusKey] integerValue];
-            
-            static NSInteger successCode = 0;
-            static NSInteger sandboxCode = 21007;
-            if (statusCode == successCode) {
-                [weakSelf saveVerifiedReceipts:transaction response:responseJSON];
-                if (successBlock != nil) successBlock();
-            } else if (statusCode == sandboxCode) {
-                [weakSelf sandboxVerify:base64Data
-                            transaction:transaction
-                                success:successBlock
-                                failure:failureBlock];
-            } else {
-                NSLog(@"Verification Failed With Code %ld", (long)statusCode);
-                NSError *serverError = [NSError errorWithDomain:XYStoreErrorDomain code:statusCode userInfo:nil];
-                if (failureBlock != nil) failureBlock(serverError);
-            }
-        });
-    });
+
+    NSURLSessionDataTask *task = [self.session dataTaskWithRequest:request completionHandler:^(NSData * _Nullable data, NSURLResponse * _Nullable response, NSError * _Nullable error) {
+        if (!data) {
+            NSError *wrapperError = [weakSelf unableVerifyReceiptError:error];
+            if (failureBlock != nil) failureBlock(wrapperError);
+            return;
+        }
+        
+        NSError *jsonError;
+        NSDictionary *responseJSON = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
+        if (!responseJSON) {
+            NSLog(@"Failed To Parse Server Response");
+            if (failureBlock != nil) failureBlock(jsonError);
+        }
+        
+        static NSString *statusKey = @"status";
+        NSInteger statusCode = [responseJSON[statusKey] integerValue];
+        
+        static NSInteger successCode = 0;
+        static NSInteger sandboxCode = 21007;
+        if (statusCode == successCode) {
+            [weakSelf saveVerifiedReceipts:transaction response:responseJSON];
+            if (successBlock != nil) successBlock();
+        } else if (statusCode == sandboxCode) {
+            [weakSelf sandboxVerify:base64Data
+                        transaction:transaction
+                            success:successBlock
+                            failure:failureBlock];
+        } else {
+            NSLog(@"Verification Failed With Code %ld", (long)statusCode);
+            NSError *serverError = [NSError errorWithDomain:XYStoreErrorDomain code:statusCode userInfo:nil];
+            if (failureBlock != nil) failureBlock(serverError);
+        }
+    }];
+    [task resume];
+    
+//    dispatch_async(dispatch_get_global_queue( DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+//        NSError *error;
+//        NSData *data = [NSURLConnection sendSynchronousRequest:request returningResponse:nil error:&error];
+//        dispatch_async(dispatch_get_main_queue(), ^{
+//            
+//            if (!data) {
+//                NSError *wrapperError = [weakSelf unableVerifyReceiptError:error];
+//                if (failureBlock != nil) failureBlock(wrapperError);
+//                return;
+//            }
+//            
+//            NSError *jsonError;
+//            NSDictionary *responseJSON = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
+//            if (!responseJSON) {
+//                NSLog(@"Failed To Parse Server Response");
+//                if (failureBlock != nil) failureBlock(jsonError);
+//            }
+//            
+//            static NSString *statusKey = @"status";
+//            NSInteger statusCode = [responseJSON[statusKey] integerValue];
+//            
+//            static NSInteger successCode = 0;
+//            static NSInteger sandboxCode = 21007;
+//            if (statusCode == successCode) {
+//                [weakSelf saveVerifiedReceipts:transaction response:responseJSON];
+//                if (successBlock != nil) successBlock();
+//            } else if (statusCode == sandboxCode) {
+//                [weakSelf sandboxVerify:base64Data
+//                            transaction:transaction
+//                                success:successBlock
+//                                failure:failureBlock];
+//            } else {
+//                NSLog(@"Verification Failed With Code %ld", (long)statusCode);
+//                NSError *serverError = [NSError errorWithDomain:XYStoreErrorDomain code:statusCode userInfo:nil];
+//                if (failureBlock != nil) failureBlock(serverError);
+//            }
+//        });
+//    });
 }
 
 /**
