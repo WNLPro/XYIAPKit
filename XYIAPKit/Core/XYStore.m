@@ -14,20 +14,20 @@ NSInteger const XYStoreErrorCodeDownloadCanceled = 300;
 NSInteger const XYStoreErrorCodeUnknownProductIdentifier = 100;
 NSInteger const XYStoreErrorCodeUnableToCompleteVerification = 200;
 
-NSString* const XYSKDownloadCanceled = @"XYSKDownloadCanceled";
-NSString* const XYSKDownloadFailed = @"XYSKDownloadFailed";
-NSString* const XYSKDownloadFinished = @"XYSKDownloadFinished";
-NSString* const XYSKDownloadPaused = @"XYSKDownloadPaused";
-NSString* const XYSKDownloadUpdated = @"XYSKDownloadUpdated";
-NSString* const XYSKPaymentTransactionDeferred = @"XYSKPaymentTransactionDeferred";
-NSString* const XYSKPaymentTransactionFailed = @"XYSKPaymentTransactionFailed";
-NSString* const XYSKPaymentTransactionFinished = @"XYSKPaymentTransactionFinished";
-NSString* const XYSKProductsRequestFailed = @"XYSKProductsRequestFailed";
-NSString* const XYSKProductsRequestFinished = @"XYSKProductsRequestFinished";
-NSString* const XYSKRefreshReceiptFailed = @"XYSKRefreshReceiptFailed";
-NSString* const XYSKRefreshReceiptFinished = @"XYSKRefreshReceiptFinished";
-NSString* const XYSKRestoreTransactionsFailed = @"XYSKRestoreTransactionsFailed";
-NSString* const XYSKRestoreTransactionsFinished = @"XYSKRestoreTransactionsFinished";
+NSString *const XYSKDownloadCanceled = @"XYSKDownloadCanceled";
+NSString *const XYSKDownloadFailed = @"XYSKDownloadFailed";
+NSString *const XYSKDownloadFinished = @"XYSKDownloadFinished";
+NSString *const XYSKDownloadPaused = @"XYSKDownloadPaused";
+NSString *const XYSKDownloadUpdated = @"XYSKDownloadUpdated";
+NSString *const XYSKPaymentTransactionDeferred = @"XYSKPaymentTransactionDeferred";
+NSString *const XYSKPaymentTransactionFailed = @"XYSKPaymentTransactionFailed";
+NSString *const XYSKPaymentTransactionFinished = @"XYSKPaymentTransactionFinished";
+NSString *const XYSKProductsRequestFailed = @"XYSKProductsRequestFailed";
+NSString *const XYSKProductsRequestFinished = @"XYSKProductsRequestFinished";
+NSString *const XYSKRefreshReceiptFailed = @"XYSKRefreshReceiptFailed";
+NSString *const XYSKRefreshReceiptFinished = @"XYSKRefreshReceiptFinished";
+NSString *const XYSKRestoreTransactionsFailed = @"XYSKRestoreTransactionsFailed";
+NSString *const XYSKRestoreTransactionsFinished = @"XYSKRestoreTransactionsFinished";
 
 typedef void (^XYSKPaymentTransactionFailureBlock)(SKPaymentTransaction *transaction, NSError *error);
 typedef void (^XYSKPaymentTransactionSuccessBlock)(SKPaymentTransaction *transaction);
@@ -35,24 +35,40 @@ typedef void (^XYStoreFailureBlock)(NSError *error);
 typedef void (^XYStoreSuccessBlock)(void);
 
 @interface XYAddPaymentParameters : NSObject
-
 @property (nonatomic, strong) XYSKPaymentTransactionSuccessBlock successBlock;
 
 @property (nonatomic, strong) XYSKPaymentTransactionFailureBlock failureBlock;
-
 @end
 
 @implementation XYAddPaymentParameters
 
 @end
 
-@interface XYStore()<SKRequestDelegate>
+@interface XYCachedTransaction : NSObject
+@property (nonatomic, strong) SKPaymentQueue *queue;
+@property (nonatomic, strong) SKPaymentTransaction *transaction;
+
+- (instancetype)initWithTransaction:(SKPaymentTransaction *)trans queue:(SKPaymentQueue *)queue;
+@end
+
+@implementation XYCachedTransaction
+- (instancetype)initWithTransaction:(SKPaymentTransaction *)trans queue:(SKPaymentQueue *)queue {
+    if (self = [super init]) {
+        self.queue = queue;
+        self.transaction = trans;
+    }
+    return self;
+}
+
+@end
+
+@interface XYStore ()<SKRequestDelegate>
 {
     NSInteger _pendingRestoredTransactionsCount;
     BOOL _restoredCompletedTransactionsFinished;
-    
-    void (^_restoreTransactionsFailureBlock)(NSError* error);
-    void (^_restoreTransactionsSuccessBlock)(NSArray* transactions);
+
+    void (^ _restoreTransactionsFailureBlock)(NSError *error);
+    void (^ _restoreTransactionsSuccessBlock)(NSArray *transactions);
 }
 
 // HACK: We use a dictionary of product identifiers because the returned SKPayment is different from the one we add to the queue. Bad Apple.
@@ -72,16 +88,22 @@ typedef void (^XYStoreSuccessBlock)(void);
 
 @property (nonatomic, weak) id<XYStoreTransactionPersistor> transactionPersistor;
 
+@property (nonatomic, strong) dispatch_semaphore_t semoPhore;
+@property (nonatomic, strong) dispatch_semaphore_t semoPhoreProcess;
+@property (nonatomic, strong) NSMutableArray<XYCachedTransaction *> *cachedTrans;
 @end
 
 @implementation XYStore
 
-- (instancetype) init
+- (instancetype)init
 {
-    if (self = [super init])
-    {
+    if (self = [super init]) {
         _restoredTransactions = [NSMutableArray array];
+        _cachedTrans = @[].mutableCopy;
+        _semoPhore = dispatch_semaphore_create(0);
+        _semoPhoreProcess = dispatch_semaphore_create(1);
         [[SKPaymentQueue defaultQueue] addTransactionObserver:self];
+        [self handleDoneTransaction];
     }
     return self;
 }
@@ -123,64 +145,62 @@ typedef void (^XYStoreSuccessBlock)(void);
     return [SKPaymentQueue canMakePayments];
 }
 
-- (void)addPayment:(NSString*)productIdentifier
+- (void)addPayment:(NSString *)productIdentifier
 {
     [self addPayment:productIdentifier success:nil failure:nil];
 }
 
-- (void)addPayment:(NSString*)productIdentifier
+- (void)addPayment:(NSString *)productIdentifier
            success:(void (^)(SKPaymentTransaction *transaction))successBlock
            failure:(void (^)(SKPaymentTransaction *transaction, NSError *error))failureBlock
 {
     [self addPayment:productIdentifier user:nil success:successBlock failure:failureBlock];
 }
 
-- (void)addPayment:(NSString*)productIdentifier
-              user:(NSString*)userIdentifier
+- (void)addPayment:(NSString *)productIdentifier
+              user:(NSString *)userIdentifier
            success:(void (^)(SKPaymentTransaction *transaction))successBlock
            failure:(void (^)(SKPaymentTransaction *transaction, NSError *error))failureBlock
 {
-    
     __weak typeof(self) weakSelf = self;
-    void(^errorBlock)(NSError *error)  = ^(NSError *error) {
+    void (^ errorBlock)(NSError *error)  = ^(NSError *error) {
         if (failureBlock) {
             failureBlock(nil, error);
         }
     };
-    
+
     id completeBlock = ^(SKProduct *product) {
         if (!product) {
             NSString *errorDesc = NSLocalizedStringFromTable(@"Unknown product identifier", @"XYIAPKit", @"Error description");
             NSError *error = [NSError errorWithDomain:XYStoreErrorDomain
                                                  code:XYStoreErrorCodeUnknownProductIdentifier
-                                             userInfo:@{NSLocalizedDescriptionKey: errorDesc}];
+                                             userInfo:@{ NSLocalizedDescriptionKey: errorDesc }];
             errorBlock(error);
-        }else {
+        } else {
             SKMutablePayment *payment = [SKMutablePayment paymentWithProduct:product];
-            if ([payment respondsToSelector:@selector(setApplicationUsername:)])
-            {
+            if ([payment respondsToSelector:@selector(setApplicationUsername:)]) {
                 payment.applicationUsername = userIdentifier;
             }
-            
+
             XYAddPaymentParameters *parameters = [[XYAddPaymentParameters alloc] init];
             parameters.successBlock = successBlock;
             parameters.failureBlock = failureBlock;
             weakSelf.addPaymentParameters[productIdentifier] = parameters;
-            
+
             [[SKPaymentQueue defaultQueue] addPayment:payment];
         }
     };
-    
+
     [self fetchProduct:productIdentifier success:completeBlock failure:errorBlock];
 }
 
 #pragma mark - requestProducts
-- (void)requestProducts:(NSSet*)identifiers
+- (void)requestProducts:(NSSet *)identifiers
 {
     [self requestProducts:identifiers success:nil failure:nil];
 }
 
-- (void)requestProducts:(NSSet*)identifiers
+- (void)requestProducts:(NSSet *)identifiers
                 success:(void (^)(NSArray *products, NSArray *invalidProductIdentifiers))successBlock
                 failure:(void (^)(NSError *error))failureBlock
 {
@@ -189,39 +209,35 @@ typedef void (^XYStoreSuccessBlock)(void);
     service.addProductBlock = ^(SKProduct *product) {
         [weakSelf addProduct:product];
     };
-    
+
     service.removeProductRequestBlock = ^(XYStoreProductService *service) {
         [weakSelf removeProductsRequest:service];
     };
-    
+
     [self.productsRequestSet addObject:service];
-    
+
     [service requestProducts:identifiers
                      success:^(NSArray *products, NSArray *invalidIdentifiers)
      {
-         
          if (successBlock) {
              successBlock(products, invalidIdentifiers);
          }
-         
-         NSDictionary *userInfo = @{XYStoreNotificationProducts: products, XYStoreNotificationInvalidProductIdentifiers: invalidIdentifiers};
+
+         NSDictionary *userInfo = @{ XYStoreNotificationProducts: products, XYStoreNotificationInvalidProductIdentifiers: invalidIdentifiers };
          [[NSNotificationCenter defaultCenter] postNotificationName:XYSKProductsRequestFinished object:self userInfo:userInfo];
-         
-     } failure:^(NSError *error) {
-         
+     }               failure:^(NSError *error) {
          if (failureBlock) {
              failureBlock(error);
          }
-         
+
          NSDictionary *userInfo = nil;
-         if (error){
+         if (error) {
              // error might be nil (e.g., on airplane mode)
-             userInfo = @{XYStoreNotificationStoreError: error};
+             userInfo = @{ XYStoreNotificationStoreError: error };
          }
          [[NSNotificationCenter defaultCenter] postNotificationName:XYSKProductsRequestFailed object:self userInfo:userInfo];
      }];
 }
-
 
 - (void)fetchProduct:(NSString *)identifier
              success:(void (^)(SKProduct *product))success
@@ -231,19 +247,19 @@ typedef void (^XYStoreSuccessBlock)(void);
         NSString *errorDesc = NSLocalizedStringFromTable(@"Unknown product identifier", @"XYIAPKit", @"Error description");
         NSError *error = [NSError errorWithDomain:XYStoreErrorDomain
                                              code:XYStoreErrorCodeUnknownProductIdentifier
-                                         userInfo:@{NSLocalizedDescriptionKey: errorDesc}];
+                                         userInfo:@{ NSLocalizedDescriptionKey: errorDesc }];
         if (failure) {
             failure(error);
         }
         return;
     }
-    
+
     SKProduct *product = [self productForIdentifier:identifier];
     if (product) {
         success(product);
         return;
     }
-    
+
     // 若内存中没有，网络获取
     NSSet *set = [[NSSet alloc] initWithArray:@[identifier]];
     [self requestProducts:set
@@ -254,7 +270,7 @@ typedef void (^XYStoreSuccessBlock)(void);
                  success(products.firstObject);
              }
          }
-     } failure:failure];
+     }            failure:failure];
 }
 
 - (void)restoreTransactions
@@ -273,7 +289,7 @@ typedef void (^XYStoreSuccessBlock)(void);
     [[SKPaymentQueue defaultQueue] restoreCompletedTransactions];
 }
 
-- (void)restoreTransactionsOfUser:(NSString*)userIdentifier
+- (void)restoreTransactionsOfUser:(NSString *)userIdentifier
                         onSuccess:(void (^)(NSArray *transactions))successBlock
                           failure:(void (^)(NSError *error))failureBlock
 {
@@ -287,7 +303,7 @@ typedef void (^XYStoreSuccessBlock)(void);
 
 #pragma mark Receipt
 
-+ (NSURL*)receiptURL
++ (NSURL *)receiptURL
 {
     NSAssert(floor(NSFoundationVersionNumber) > NSFoundationVersionNumber_iOS_6_1, @"appStoreReceiptURL not supported in this iOS version.");
     NSURL *url = [NSBundle mainBundle].appStoreReceiptURL;
@@ -306,44 +322,43 @@ typedef void (^XYStoreSuccessBlock)(void);
         if (successBlock) {
             successBlock();
         }
-        
+
         [[NSNotificationCenter defaultCenter] postNotificationName:XYSKRefreshReceiptFinished object:self];
-        
     } failure:^(NSError *error) {
         if (failureBlock) {
             failureBlock(error);
         }
-        
+
         NSDictionary *userInfo = nil;
         if (error) {
-            userInfo = @{XYStoreNotificationStoreError: error};
+            userInfo = @{ XYStoreNotificationStoreError: error };
         }
         [[NSNotificationCenter defaultCenter] postNotificationName:XYSKRefreshReceiptFailed object:self userInfo:userInfo];
     }];
 }
 
-- (void)base64Receipt:(void(^)(NSString *base64Data))success
-              failure:(void(^)(NSError *error))failure
+- (void)base64Receipt:(void (^)(NSString *base64Data))success
+              failure:(void (^)(NSError *error))failure
 {
-    void(^handler)(NSURL *url) = ^(NSURL *url) {
+    void (^ handler)(NSURL *url) = ^(NSURL *url) {
         NSData *data = [NSData dataWithContentsOfURL:url];
         NSString *base64Data = [data base64EncodedStringWithOptions:0];
         if (success) {
             success(base64Data);
         }
     };
-    
+
     NSURL *URL = [NSBundle mainBundle].appStoreReceiptURL;
     if (URL) {
         handler(URL);
-    }else {
+    } else {
         [self refreshReceiptOnSuccess:^{
             NSURL *URL = [NSBundle mainBundle].appStoreReceiptURL;
             if (URL) {
                 handler(URL);
-            }else {
+            } else {
                 if (failure) {
-                    failure([NSError errorWithDomain:@"com.iapkit" code:100001 userInfo:@{NSLocalizedDescriptionKey : @"None appStoreReceiptUR"}]);
+                    failure([NSError errorWithDomain:@"com.iapkit" code:100001 userInfo:@{ NSLocalizedDescriptionKey: @"None appStoreReceiptUR" }]);
                 }
             }
         } failure:failure];
@@ -352,12 +367,12 @@ typedef void (^XYStoreSuccessBlock)(void);
 
 #pragma mark Product management
 
-- (SKProduct*)productForIdentifier:(NSString*)productIdentifier
+- (SKProduct *)productForIdentifier:(NSString *)productIdentifier
 {
     return self.products[productIdentifier];
 }
 
-+ (NSString*)localizedPriceOfProduct:(SKProduct*)product
++ (NSString *)localizedPriceOfProduct:(SKProduct *)product
 {
     NSNumberFormatter *numberFormatter = [[NSNumberFormatter alloc] init];
     numberFormatter.numberStyle = NSNumberFormatterCurrencyStyle;
@@ -405,10 +420,9 @@ typedef void (^XYStoreSuccessBlock)(void);
 }
 
 // Private
-- (void)addStoreObserver:(id<XYStoreObserver>)observer selector:(SEL)aSelector notificationName:(NSString*)notificationName
+- (void)addStoreObserver:(id<XYStoreObserver>)observer selector:(SEL)aSelector notificationName:(NSString *)notificationName
 {
-    if ([observer respondsToSelector:aSelector])
-    {
+    if ([observer respondsToSelector:aSelector]) {
         [[NSNotificationCenter defaultCenter] addObserver:observer selector:aSelector name:notificationName object:self];
     }
 }
@@ -417,10 +431,8 @@ typedef void (^XYStoreSuccessBlock)(void);
 
 - (void)paymentQueue:(SKPaymentQueue *)queue updatedTransactions:(NSArray *)transactions
 {
-    for (SKPaymentTransaction *transaction in transactions)
-    {
-        switch (transaction.transactionState)
-        {
+    for (SKPaymentTransaction *transaction in transactions) {
+        switch (transaction.transactionState) {
             case SKPaymentTransactionStatePurchased:
                 [self didPurchaseTransaction:transaction queue:queue];
                 break;
@@ -443,31 +455,28 @@ typedef void (^XYStoreSuccessBlock)(void);
 {
     NSLog(@"restore transactions finished");
     _restoredCompletedTransactionsFinished = YES;
-    
+
     [self notifyRestoreTransactionFinishedIfApplicableAfterTransaction:nil];
 }
 
 - (void)paymentQueue:(SKPaymentQueue *)queue restoreCompletedTransactionsFailedWithError:(NSError *)error
 {
     NSLog(@"restored transactions failed with error %@", error.debugDescription);
-    if (_restoreTransactionsFailureBlock != nil)
-    {
+    if (_restoreTransactionsFailureBlock != nil) {
         _restoreTransactionsFailureBlock(error);
         _restoreTransactionsFailureBlock = nil;
     }
     NSDictionary *userInfo = nil;
     if (error) {
-        userInfo = @{XYStoreNotificationStoreError: error};
+        userInfo = @{ XYStoreNotificationStoreError: error };
     }
     [[NSNotificationCenter defaultCenter] postNotificationName:XYSKRestoreTransactionsFailed object:self userInfo:userInfo];
 }
 
 - (void)paymentQueue:(SKPaymentQueue *)queue updatedDownloads:(NSArray *)downloads
 {
-    for (SKDownload *download in downloads)
-    {
-        switch (download.downloadState)
-        {
+    for (SKDownload *download in downloads) {
+        switch (download.downloadState) {
             case SKDownloadStateActive:
                 [self didUpdateDownload:download queue:queue];
                 break;
@@ -496,71 +505,66 @@ typedef void (^XYStoreSuccessBlock)(void);
 
 #pragma mark Download State
 
-- (void)didCancelDownload:(SKDownload*)download queue:(SKPaymentQueue*)queue
+- (void)didCancelDownload:(SKDownload *)download queue:(SKPaymentQueue *)queue
 {
     SKPaymentTransaction *transaction = download.transaction;
     NSLog(@"download %@ for product %@ canceled", download.contentIdentifier, download.transaction.payment.productIdentifier);
-    
+
     [self postNotificationWithName:XYSKDownloadCanceled download:download userInfoExtras:nil];
-    
-    NSError *error = [NSError errorWithDomain:XYStoreErrorDomain code:XYStoreErrorCodeDownloadCanceled userInfo:@{NSLocalizedDescriptionKey: NSLocalizedStringFromTable(@"Download canceled", @"XYStore", @"Error description")}];
-    
+
+    NSError *error = [NSError errorWithDomain:XYStoreErrorDomain code:XYStoreErrorCodeDownloadCanceled userInfo:@{ NSLocalizedDescriptionKey: NSLocalizedStringFromTable(@"Download canceled", @"XYStore", @"Error description") }];
+
     const BOOL hasPendingDownloads = [self.class hasPendingDownloadsInTransaction:transaction];
-    if (!hasPendingDownloads)
-    {
+    if (!hasPendingDownloads) {
         [self didFailTransaction:transaction queue:queue error:error];
     }
 }
 
-- (void)didFailDownload:(SKDownload*)download queue:(SKPaymentQueue*)queue
+- (void)didFailDownload:(SKDownload *)download queue:(SKPaymentQueue *)queue
 {
     NSError *error = download.error;
     SKPaymentTransaction *transaction = download.transaction;
     NSLog(@"download %@ for product %@ failed with error %@", download.contentIdentifier, transaction.payment.productIdentifier, error.debugDescription);
-    
-    NSDictionary *extras = error ? @{XYStoreNotificationStoreError : error} : nil;
+
+    NSDictionary *extras = error ? @{ XYStoreNotificationStoreError: error } : nil;
     [self postNotificationWithName:XYSKDownloadFailed download:download userInfoExtras:extras];
-    
+
     const BOOL hasPendingDownloads = [self.class hasPendingDownloadsInTransaction:transaction];
-    if (!hasPendingDownloads)
-    {
+    if (!hasPendingDownloads) {
         [self didFailTransaction:transaction queue:queue error:error];
     }
 }
 
-- (void)didFinishDownload:(SKDownload*)download queue:(SKPaymentQueue*)queue
+- (void)didFinishDownload:(SKDownload *)download queue:(SKPaymentQueue *)queue
 {
     SKPaymentTransaction *transaction = download.transaction;
     NSLog(@"download %@ for product %@ finished", download.contentIdentifier, transaction.payment.productIdentifier);
-    
+
     [self postNotificationWithName:XYSKDownloadFinished download:download userInfoExtras:nil];
-    
+
     const BOOL hasPendingDownloads = [self.class hasPendingDownloadsInTransaction:transaction];
-    if (!hasPendingDownloads)
-    {
+    if (!hasPendingDownloads) {
         [self finishTransaction:download.transaction queue:queue];
     }
 }
 
-- (void)didPauseDownload:(SKDownload*)download queue:(SKPaymentQueue*)queue
+- (void)didPauseDownload:(SKDownload *)download queue:(SKPaymentQueue *)queue
 {
     NSLog(@"download %@ for product %@ paused", download.contentIdentifier, download.transaction.payment.productIdentifier);
     [self postNotificationWithName:XYSKDownloadPaused download:download userInfoExtras:nil];
 }
 
-- (void)didUpdateDownload:(SKDownload*)download queue:(SKPaymentQueue*)queue
+- (void)didUpdateDownload:(SKDownload *)download queue:(SKPaymentQueue *)queue
 {
     NSLog(@"download %@ for product %@ updated", download.contentIdentifier, download.transaction.payment.productIdentifier);
-    NSDictionary *extras = @{XYStoreNotificationDownloadProgress : @(download.progress)};
+    NSDictionary *extras = @{ XYStoreNotificationDownloadProgress: @(download.progress) };
     [self postNotificationWithName:XYSKDownloadUpdated download:download userInfoExtras:extras];
 }
 
-+ (BOOL)hasPendingDownloadsInTransaction:(SKPaymentTransaction*)transaction
++ (BOOL)hasPendingDownloadsInTransaction:(SKPaymentTransaction *)transaction
 {
-    for (SKDownload *download in transaction.downloads)
-    {
-        switch (download.downloadState)
-        {
+    for (SKDownload *download in transaction.downloads) {
+        switch (download.downloadState) {
             case SKDownloadStateActive:
             case SKDownloadStatePaused:
             case SKDownloadStateWaiting:
@@ -576,68 +580,101 @@ typedef void (^XYStoreSuccessBlock)(void);
 
 #pragma mark Transaction State
 
-- (void)didPurchaseTransaction:(SKPaymentTransaction *)transaction queue:(SKPaymentQueue*)queue
+- (void)didPurchaseTransaction:(SKPaymentTransaction *)transaction queue:(SKPaymentQueue *)queue
 {
     NSLog(@"transaction purchased with product %@", transaction.payment.productIdentifier);
-    if (self.receiptVerifier != nil)
-    {
-        [self.receiptVerifier verifyTransaction:transaction success:^{
-            [self didVerifyTransaction:transaction queue:queue];
-        } failure:^(NSError *error) {
-            [self didFailTransaction:transaction queue:queue error:error];
-        }];
-    }
-    else
-    {
-        NSLog(@"WARNING: no receipt verification");
-        [self didVerifyTransaction:transaction queue:queue];
-    }
+    [_cachedTrans addObject:[[XYCachedTransaction alloc] initWithTransaction:transaction queue:queue]];
+    dispatch_semaphore_signal(self.semoPhore);
+
+//    if (self.receiptVerifier != nil) {
+//        [self.receiptVerifier verifyTransaction:transaction success:^{
+//            [self didVerifyTransaction:transaction queue:queue];
+//        } failure:^(NSError *error) {
+//            [self didFailTransaction:transaction queue:queue error:error];
+//        }];
+//    } else {
+//        NSLog(@"WARNING: no receipt verification");
+//        [self didVerifyTransaction:transaction queue:queue];
+//    }
 }
 
-- (void)didFailTransaction:(SKPaymentTransaction *)transaction queue:(SKPaymentQueue*)queue error:(NSError*)error
+- (void)handleDoneTransaction {
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        while (true) {
+            NSLog(@"handleDoneTransaction: %d", self.cachedTrans.count);
+            dispatch_semaphore_wait(self.semoPhore, DISPATCH_TIME_FOREVER);
+            //get transaction and handle
+            XYCachedTransaction *trans = [self.cachedTrans firstObject];
+            [self.cachedTrans removeObject:trans];
+            SKPaymentTransaction *transaction = trans.transaction;
+            SKPaymentQueue *queue = trans.queue;
+            if (self.receiptVerifier != nil) {
+                [self.receiptVerifier verifyTransaction:transaction success:^{
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                                       [self didVerifyTransaction:transaction queue:queue];
+                                   });
+                    dispatch_semaphore_signal(self.semoPhoreProcess);
+                } failure:^(NSError *error) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                                       [self didFailTransaction:transaction queue:queue error:error];
+                                   });
+                    dispatch_semaphore_signal(self.semoPhoreProcess);
+                }];
+            } else {
+                NSLog(@"WARNING: no receipt verification");
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [self didVerifyTransaction:transaction queue:queue];
+                });
+                dispatch_semaphore_signal(self.semoPhoreProcess);
+            }
+
+            dispatch_semaphore_wait(self.semoPhoreProcess, DISPATCH_TIME_FOREVER);
+        }
+    });
+}
+
+- (void)didFailTransaction:(SKPaymentTransaction *)transaction queue:(SKPaymentQueue *)queue error:(NSError *)error
 {
     SKPayment *payment = transaction.payment;
-    NSString* productIdentifier = payment.productIdentifier;
+    NSString *productIdentifier = payment.productIdentifier;
     NSLog(@"transaction failed with product %@ and error %@", productIdentifier, error.debugDescription);
-    
-    if (error.code != XYStoreErrorCodeUnableToCompleteVerification)
-    { // If we were unable to complete the verification we want StoreKit to keep reminding us of the transaction
+
+    if (error.code != XYStoreErrorCodeUnableToCompleteVerification) { // If we were unable to complete the verification we want StoreKit to keep reminding us of the transaction
         [queue finishTransaction:transaction];
     }
-    
+
     XYAddPaymentParameters *parameters = [self popAddPaymentParametersForIdentifier:productIdentifier];
-    if (parameters.failureBlock != nil)
-    {
+    if (parameters.failureBlock != nil) {
         parameters.failureBlock(transaction, error);
     }
-    
-    NSDictionary *extras = error ? @{XYStoreNotificationStoreError : error} : nil;
+
+    NSDictionary *extras = error ? @{ XYStoreNotificationStoreError: error } : nil;
     [self postNotificationWithName:XYSKPaymentTransactionFailed transaction:transaction userInfoExtras:extras];
-    
-    if (transaction.transactionState == SKPaymentTransactionStateRestored)
-    {
+
+    if (transaction.transactionState == SKPaymentTransactionStateRestored) {
         [self notifyRestoreTransactionFinishedIfApplicableAfterTransaction:transaction];
     }
 }
 
-- (void)didRestoreTransaction:(SKPaymentTransaction *)transaction queue:(SKPaymentQueue*)queue
+- (void)didRestoreTransaction:(SKPaymentTransaction *)transaction queue:(SKPaymentQueue *)queue
 {
     NSLog(@"transaction restored with product %@", transaction.originalTransaction.payment.productIdentifier);
-    
+
     _pendingRestoredTransactionsCount++;
-    if (self.receiptVerifier != nil)
-    {
-        [self.receiptVerifier verifyTransaction:transaction success:^{
-            [self didVerifyTransaction:transaction queue:queue];
-        } failure:^(NSError *error) {
-            [self didFailTransaction:transaction queue:queue error:error];
-        }];
-    }
-    else
-    {
-        NSLog(@"WARNING: no receipt verification");
-        [self didVerifyTransaction:transaction queue:queue];
-    }
+
+    [_cachedTrans addObject:[[XYCachedTransaction alloc] initWithTransaction:transaction queue:queue]];
+    dispatch_semaphore_signal(self.semoPhore);
+
+//    if (self.receiptVerifier != nil) {
+//        [self.receiptVerifier verifyTransaction:transaction success:^{
+//            [self didVerifyTransaction:transaction queue:queue];
+//        } failure:^(NSError *error) {
+//            [self didFailTransaction:transaction queue:queue error:error];
+//        }];
+//    } else {
+//        NSLog(@"WARNING: no receipt verification");
+//        [self didVerifyTransaction:transaction queue:queue];
+//    }
 }
 
 - (void)didDeferTransaction:(SKPaymentTransaction *)transaction
@@ -645,18 +682,17 @@ typedef void (^XYStoreSuccessBlock)(void);
     [self postNotificationWithName:XYSKPaymentTransactionDeferred transaction:transaction userInfoExtras:nil];
 }
 
-- (void)didVerifyTransaction:(SKPaymentTransaction *)transaction queue:(SKPaymentQueue*)queue
+- (void)didVerifyTransaction:(SKPaymentTransaction *)transaction queue:(SKPaymentQueue *)queue
 {
-    if (self.contentDownloader != nil)
-    {
+    if (self.contentDownloader != nil) {
         [self.contentDownloader downloadContentForTransaction:transaction success:^{
             [self postNotificationWithName:XYSKDownloadFinished transaction:transaction userInfoExtras:nil];
             [self didDownloadSelfHostedContentForTransaction:transaction queue:queue];
         } progress:^(float progress) {
-            NSDictionary *extras = @{XYStoreNotificationDownloadProgress : @(progress)};
+            NSDictionary *extras = @{ XYStoreNotificationDownloadProgress: @(progress) };
             [self postNotificationWithName:XYSKDownloadUpdated transaction:transaction userInfoExtras:extras];
         } failure:^(NSError *error) {
-            NSDictionary *extras = error ? @{XYStoreNotificationStoreError : error} : nil;
+            NSDictionary *extras = error ? @{ XYStoreNotificationStoreError: error } : nil;
             [self postNotificationWithName:XYSKDownloadFailed transaction:transaction userInfoExtras:extras];
             [self didFailTransaction:transaction queue:queue error:error];
         }];
@@ -665,63 +701,56 @@ typedef void (^XYStoreSuccessBlock)(void);
     }
 }
 
-- (void)didDownloadSelfHostedContentForTransaction:(SKPaymentTransaction *)transaction queue:(SKPaymentQueue*)queue
+- (void)didDownloadSelfHostedContentForTransaction:(SKPaymentTransaction *)transaction queue:(SKPaymentQueue *)queue
 {
     NSArray *downloads = [transaction respondsToSelector:@selector(downloads)] ? transaction.downloads : @[];
-    if (downloads.count > 0)
-    {
+    if (downloads.count > 0) {
         NSLog(@"starting downloads for product %@ started", transaction.payment.productIdentifier);
         [queue startDownloads:downloads];
-    }
-    else
-    {
+    } else {
         [self finishTransaction:transaction queue:queue];
     }
 }
 
-- (void)finishTransaction:(SKPaymentTransaction *)transaction queue:(SKPaymentQueue*)queue
+- (void)finishTransaction:(SKPaymentTransaction *)transaction queue:(SKPaymentQueue *)queue
 {
     SKPayment *payment = transaction.payment;
-    NSString* productIdentifier = payment.productIdentifier;
+    NSString *productIdentifier = payment.productIdentifier;
     [queue finishTransaction:transaction];
     [self.transactionPersistor persistTransaction:transaction];
-    
+
     XYAddPaymentParameters *wrapper = [self popAddPaymentParametersForIdentifier:productIdentifier];
-    if (wrapper.successBlock != nil)
-    {
+    if (wrapper.successBlock != nil) {
         wrapper.successBlock(transaction);
     }
-    
+
     if (transaction.transactionState == SKPaymentTransactionStatePurchased) {
         [self postNotificationWithName:XYSKPaymentTransactionFinished transaction:transaction userInfoExtras:nil];
     }
-    
+
     if (transaction.transactionState == SKPaymentTransactionStateRestored) {
         [self notifyRestoreTransactionFinishedIfApplicableAfterTransaction:transaction];
     }
 }
 
-- (void)notifyRestoreTransactionFinishedIfApplicableAfterTransaction:(SKPaymentTransaction*)transaction
+- (void)notifyRestoreTransactionFinishedIfApplicableAfterTransaction:(SKPaymentTransaction *)transaction
 {
-    if (transaction != nil)
-    {
+    if (transaction != nil) {
         [_restoredTransactions addObject:transaction];
         _pendingRestoredTransactionsCount--;
     }
-    if (_restoredCompletedTransactionsFinished && _pendingRestoredTransactionsCount == 0)
-    { // Wait until all restored transations have been verified
+    if (_restoredCompletedTransactionsFinished && _pendingRestoredTransactionsCount == 0) { // Wait until all restored transations have been verified
         NSArray *restoredTransactions = [_restoredTransactions copy];
-        if (_restoreTransactionsSuccessBlock != nil)
-        {
+        if (_restoreTransactionsSuccessBlock != nil) {
             _restoreTransactionsSuccessBlock(restoredTransactions);
             _restoreTransactionsSuccessBlock = nil;
         }
-        NSDictionary *userInfo = @{ XYStoreNotificationTransactions : restoredTransactions };
+        NSDictionary *userInfo = @{ XYStoreNotificationTransactions: restoredTransactions };
         [[NSNotificationCenter defaultCenter] postNotificationName:XYSKRestoreTransactionsFinished object:self userInfo:userInfo];
     }
 }
 
-- (XYAddPaymentParameters*)popAddPaymentParametersForIdentifier:(NSString*)identifier
+- (XYAddPaymentParameters *)popAddPaymentParametersForIdentifier:(NSString *)identifier
 {
     XYAddPaymentParameters *parameters = self.addPaymentParameters[identifier];
     [self.addPaymentParameters removeObjectForKey:identifier];
@@ -730,19 +759,19 @@ typedef void (^XYStoreSuccessBlock)(void);
 
 #pragma mark Private
 
-- (void)addProduct:(SKProduct*)product
+- (void)addProduct:(SKProduct *)product
 {
     self.products[product.productIdentifier] = product;
 }
 
-- (void)postNotificationWithName:(NSString*)notificationName download:(SKDownload*)download userInfoExtras:(NSDictionary*)extras
+- (void)postNotificationWithName:(NSString *)notificationName download:(SKDownload *)download userInfoExtras:(NSDictionary *)extras
 {
     NSMutableDictionary *mutableExtras = extras ? [NSMutableDictionary dictionaryWithDictionary:extras] : [NSMutableDictionary dictionary];
     mutableExtras[XYStoreNotificationStoreDownload] = download;
     [self postNotificationWithName:notificationName transaction:download.transaction userInfoExtras:mutableExtras];
 }
 
-- (void)postNotificationWithName:(NSString*)notificationName transaction:(SKPaymentTransaction*)transaction userInfoExtras:(NSDictionary*)extras
+- (void)postNotificationWithName:(NSString *)notificationName transaction:(SKPaymentTransaction *)transaction userInfoExtras:(NSDictionary *)extras
 {
     NSString *productIdentifier = transaction.payment.productIdentifier;
     NSMutableDictionary *userInfo = [NSMutableDictionary dictionary];
@@ -766,7 +795,7 @@ typedef void (^XYStoreSuccessBlock)(void);
     if (!_productsRequestSet) {
         _productsRequestSet = [NSMutableSet set];
     }
-    
+
     return _productsRequestSet;
 }
 
@@ -775,7 +804,7 @@ typedef void (^XYStoreSuccessBlock)(void);
     if (!_receiptService) {
         _receiptService = [[XYReceiptRefreshService alloc] init];
     }
-    
+
     return _receiptService;
 }
 
@@ -784,7 +813,7 @@ typedef void (^XYStoreSuccessBlock)(void);
     if (!_addPaymentParameters) {
         _addPaymentParameters = [NSMutableDictionary dictionary];
     }
-    
+
     return _addPaymentParameters;
 }
 
@@ -793,9 +822,8 @@ typedef void (^XYStoreSuccessBlock)(void);
     if (!_products) {
         _products = [NSMutableDictionary dictionary];
     }
-    
+
     return _products;
 }
 
 @end
-
