@@ -13,6 +13,10 @@
 
 + (instancetype)shareInstance;
 
+/** Check the transaction has restored or not
+ */
+- (BOOL)transactionHasRestored:(NSString *)transId productId:(NSString *)productIdentifier;
+
 /** Remove all transactions from user defaults.
  */
 - (void)removeTransactions;

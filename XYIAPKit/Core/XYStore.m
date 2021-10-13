@@ -579,12 +579,35 @@ typedef void (^XYStoreSuccessBlock)(void);
 }
 
 #pragma mark Transaction State
+#define kXYStoreIAPCacheItems @"iap.cacheditems"
+- (BOOL)isTransResotred:(SKPaymentTransaction *)trans {
+    NSArray<NSString *> *items = [NSUserDefaults.standardUserDefaults arrayForKey:kXYStoreIAPCacheItems];
+    return [items containsObject:[NSString stringWithFormat:@"%@-%@", trans.payment.productIdentifier, @(trans.transactionDate.timeIntervalSince1970)]];
+}
+
+- (void)saveTransaction:(SKPaymentTransaction *)trans {
+    NSArray<NSString *> *items = [NSUserDefaults.standardUserDefaults arrayForKey:kXYStoreIAPCacheItems];
+    NSMutableSet *set = [NSMutableSet setWithArray:items];
+    [set addObject:[NSString stringWithFormat:@"%@-%@", trans.payment.productIdentifier, @(trans.transactionDate.timeIntervalSince1970)]];
+    [NSUserDefaults.standardUserDefaults setObject:set.allObjects forKey:kXYStoreIAPCacheItems];
+}
 
 - (void)didPurchaseTransaction:(SKPaymentTransaction *)transaction queue:(SKPaymentQueue *)queue
 {
     NSLog(@"transaction purchased with product %@", transaction.payment.productIdentifier);
-    [_cachedTrans addObject:[[XYCachedTransaction alloc] initWithTransaction:transaction queue:queue]];
-    dispatch_semaphore_signal(self.semoPhore);
+
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        if ([self isTransResotred:transaction]) {
+            [self didVerifyTransaction:transaction queue:queue];
+
+            return;
+        }
+
+        NSLog(@"verify purchased trans: %@", transaction);
+
+        [self.cachedTrans addObject:[[XYCachedTransaction alloc] initWithTransaction:transaction queue:queue]];
+        dispatch_semaphore_signal(self.semoPhore);
+    });
 
 //    if (self.receiptVerifier != nil) {
 //        [self.receiptVerifier verifyTransaction:transaction success:^{
@@ -659,11 +682,18 @@ typedef void (^XYStoreSuccessBlock)(void);
 - (void)didRestoreTransaction:(SKPaymentTransaction *)transaction queue:(SKPaymentQueue *)queue
 {
     NSLog(@"transaction restored with product %@", transaction.originalTransaction.payment.productIdentifier);
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        if ([self isTransResotred:transaction]) {
+            [self didVerifyTransaction:transaction queue:queue];
+            return;
+        }
+        
+        NSLog(@"verify restore trans: %@", transaction);
+        self->_pendingRestoredTransactionsCount++;
 
-    _pendingRestoredTransactionsCount++;
-
-    [_cachedTrans addObject:[[XYCachedTransaction alloc] initWithTransaction:transaction queue:queue]];
-    dispatch_semaphore_signal(self.semoPhore);
+        [self.cachedTrans addObject:[[XYCachedTransaction alloc] initWithTransaction:transaction queue:queue]];
+        dispatch_semaphore_signal(self.semoPhore);
+    });
 
 //    if (self.receiptVerifier != nil) {
 //        [self.receiptVerifier verifyTransaction:transaction success:^{
@@ -699,6 +729,8 @@ typedef void (^XYStoreSuccessBlock)(void);
     } else {
         [self didDownloadSelfHostedContentForTransaction:transaction queue:queue];
     }
+    
+    [self saveTransaction:transaction];
 }
 
 - (void)didDownloadSelfHostedContentForTransaction:(SKPaymentTransaction *)transaction queue:(SKPaymentQueue *)queue

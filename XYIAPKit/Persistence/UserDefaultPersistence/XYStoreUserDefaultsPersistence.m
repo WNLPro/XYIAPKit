@@ -8,7 +8,7 @@
 #import "XYStoreUserDefaultsPersistence.h"
 #import "XYStoreTransaction.h"
 
-NSString* const XYStoreTransactionsUserDefaultsKey = @"XYStoreTransactions";
+NSString *const XYStoreTransactionsUserDefaultsKey = @"XYStoreTransactions";
 
 @implementation XYStoreUserDefaultsPersistence
 
@@ -19,30 +19,51 @@ NSString* const XYStoreTransactionsUserDefaultsKey = @"XYStoreTransactions";
     dispatch_once(&onceToken, ^{
         shareInstance = [[XYStoreUserDefaultsPersistence alloc] init];
     });
-    
+
     return shareInstance;
 }
 
 #pragma mark - XYStoreTransactionPersistor
 
-- (void)persistTransaction:(SKPaymentTransaction*)paymentTransaction
+- (void)persistTransaction:(SKPaymentTransaction *)paymentTransaction
 {
     NSUserDefaults *defaults = [self userDefaults];
     NSDictionary *purchases = [defaults objectForKey:XYStoreTransactionsUserDefaultsKey] ? : @{};
-    
+
     SKPayment *payment = paymentTransaction.payment;
     NSString *productIdentifier = payment.productIdentifier;
-    
+
     NSArray *transactions = purchases[productIdentifier] ? : @[];
     NSMutableArray *updatedTransactions = [NSMutableArray arrayWithArray:transactions];
-    
+
     XYStoreTransaction *transaction = [[XYStoreTransaction alloc] initWithPaymentTransaction:paymentTransaction];
     NSData *data = [self dataWithTransaction:transaction];
     [updatedTransactions addObject:data];
     [self setTransactions:updatedTransactions forProductIdentifier:productIdentifier];
 }
 
+- (BOOL)hasResotredTrans:(SKPaymentTransaction *)transaction {
+    return [self transactionHasRestored:transaction.transactionIdentifier productId:transaction.payment.productIdentifier];
+}
+
 #pragma mark - Public
+
+- (BOOL)transactionHasRestored:(NSString *)transId productId:(NSString *)productIdentifier {
+    NSUserDefaults *defaults = [self userDefaults];
+    NSDictionary *purchases = [defaults objectForKey:XYStoreTransactionsUserDefaultsKey] ? : @{};
+    NSArray *transactions = purchases[productIdentifier] ? : @[];
+    NSUInteger index = NSNotFound;
+    index = [transactions indexOfObjectPassingTest:^BOOL (NSData *_Nonnull data, NSUInteger idx, BOOL *_Nonnull stop) {
+        XYStoreTransaction *transaction = [self transactionWithData:data];
+        if ([transaction.transactionIdentifier isEqualToString:transId]) {
+            *stop = YES;
+            return YES;
+        } else {
+            return NO;
+        }
+    }];
+    return index != NSNotFound;
+}
 
 - (void)removeTransactions
 {
@@ -51,16 +72,14 @@ NSString* const XYStoreTransactionsUserDefaultsKey = @"XYStoreTransactions";
     [defaults synchronize];
 }
 
-- (BOOL)consumeProductOfIdentifier:(NSString*)productIdentifier
+- (BOOL)consumeProductOfIdentifier:(NSString *)productIdentifier
 {
     NSUserDefaults *defaults = [self userDefaults];
     NSDictionary *purchases = [defaults objectForKey:XYStoreTransactionsUserDefaultsKey] ? : @{};
     NSArray *transactions = purchases[productIdentifier] ? : @[];
-    for (NSData *data in transactions)
-    {
+    for (NSData *data in transactions) {
         XYStoreTransaction *transaction = [self transactionWithData:data];
-        if (!transaction.consumed)
-        {
+        if (!transaction.consumed) {
             transaction.consumed = YES;
             NSData *updatedData = [self dataWithTransaction:transaction];
             NSMutableArray *updatedTransactions = [NSMutableArray arrayWithArray:transactions];
@@ -73,24 +92,25 @@ NSString* const XYStoreTransactionsUserDefaultsKey = @"XYStoreTransactions";
     return NO;
 }
 
-- (NSInteger)countProductOfdentifier:(NSString*)productIdentifier
+- (NSInteger)countProductOfdentifier:(NSString *)productIdentifier
 {
     NSArray *transactions = [self transactionsForProductOfIdentifier:productIdentifier];
     NSInteger count = 0;
-    for (XYStoreTransaction *transaction in transactions)
-    {
-        if (!transaction.consumed) { count++; }
+    for (XYStoreTransaction *transaction in transactions) {
+        if (!transaction.consumed) {
+            count++;
+        }
     }
     return count;
 }
 
-- (BOOL)isPurchasedProductOfIdentifier:(NSString*)productIdentifier
+- (BOOL)isPurchasedProductOfIdentifier:(NSString *)productIdentifier
 {
     NSArray *transactions = [self transactionsForProductOfIdentifier:productIdentifier];
     return transactions.count > 0;
 }
 
-- (NSSet*)purchasedProductIdentifiers
+- (NSSet *)purchasedProductIdentifiers
 {
     NSUserDefaults *defaults = [self userDefaults];
     NSDictionary *purchases = [defaults objectForKey:XYStoreTransactionsUserDefaultsKey];
@@ -98,14 +118,13 @@ NSString* const XYStoreTransactionsUserDefaultsKey = @"XYStoreTransactions";
     return productIdentifiers;
 }
 
-- (NSArray*)transactionsForProductOfIdentifier:(NSString*)productIdentifier
+- (NSArray *)transactionsForProductOfIdentifier:(NSString *)productIdentifier
 {
     NSUserDefaults *defaults = [self userDefaults];
     NSDictionary *purchases = [defaults objectForKey:XYStoreTransactionsUserDefaultsKey];
     NSArray *obfuscatedTransactions = purchases[productIdentifier] ? : @[];
     NSMutableArray *transactions = [NSMutableArray arrayWithCapacity:obfuscatedTransactions.count];
-    for (NSData *data in obfuscatedTransactions)
-    {
+    for (NSData *data in obfuscatedTransactions) {
         XYStoreTransaction *transaction = [self transactionWithData:data];
         [transactions addObject:transaction];
     }
@@ -119,7 +138,7 @@ NSString* const XYStoreTransactionsUserDefaultsKey = @"XYStoreTransactions";
 
 #pragma mark - Obfuscation
 
-- (NSData*)dataWithTransaction:(XYStoreTransaction*)transaction
+- (NSData *)dataWithTransaction:(XYStoreTransaction *)transaction
 {
     NSMutableData *data = [[NSMutableData alloc] init];
     NSKeyedArchiver *archiver = [[NSKeyedArchiver alloc] initForWritingWithMutableData:data];
@@ -128,7 +147,7 @@ NSString* const XYStoreTransactionsUserDefaultsKey = @"XYStoreTransactions";
     return data;
 }
 
-- (XYStoreTransaction*)transactionWithData:(NSData*)data
+- (XYStoreTransaction *)transactionWithData:(NSData *)data
 {
     NSKeyedUnarchiver *unarchiver = [[NSKeyedUnarchiver alloc] initForReadingWithData:data];
     XYStoreTransaction *transaction = [unarchiver decodeObject];
@@ -138,7 +157,7 @@ NSString* const XYStoreTransactionsUserDefaultsKey = @"XYStoreTransactions";
 
 #pragma mark - Private
 
-- (void)setTransactions:(NSArray*)transactions forProductIdentifier:(NSString*)productIdentifier
+- (void)setTransactions:(NSArray *)transactions forProductIdentifier:(NSString *)productIdentifier
 {
     NSUserDefaults *defaults = [self userDefaults];
     NSDictionary *purchases = [defaults objectForKey:XYStoreTransactionsUserDefaultsKey] ? : @{};
@@ -147,6 +166,5 @@ NSString* const XYStoreTransactionsUserDefaultsKey = @"XYStoreTransactions";
     [defaults setObject:updatedPurchases forKey:XYStoreTransactionsUserDefaultsKey];
     [defaults synchronize];
 }
-
 
 @end

@@ -24,6 +24,9 @@
 
 - (void)persistTransaction:(SKPaymentTransaction*)transaction;
 
+
+- (BOOL)hasResotredTrans:(SKPaymentTransaction*)transaction;
+
 @end
 
 @protocol XYStoreReceiptVerifier <NSObject>
