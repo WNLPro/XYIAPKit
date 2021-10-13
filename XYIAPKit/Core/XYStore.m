@@ -598,7 +598,9 @@ typedef void (^XYStoreSuccessBlock)(void);
 
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         if ([self isTransResotred:transaction]) {
-            [self didVerifyTransaction:transaction queue:queue];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self didVerifyTransaction:transaction queue:queue];
+            });
 
             return;
         }
@@ -684,10 +686,12 @@ typedef void (^XYStoreSuccessBlock)(void);
     NSLog(@"transaction restored with product %@", transaction.originalTransaction.payment.productIdentifier);
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         if ([self isTransResotred:transaction]) {
-            [self didVerifyTransaction:transaction queue:queue];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self didVerifyTransaction:transaction queue:queue];
+            });
             return;
         }
-        
+
         NSLog(@"verify restore trans: %@", transaction);
         self->_pendingRestoredTransactionsCount++;
 
@@ -729,7 +733,7 @@ typedef void (^XYStoreSuccessBlock)(void);
     } else {
         [self didDownloadSelfHostedContentForTransaction:transaction queue:queue];
     }
-    
+
     [self saveTransaction:transaction];
 }
 
