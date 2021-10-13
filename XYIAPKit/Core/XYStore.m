@@ -598,9 +598,7 @@ typedef void (^XYStoreSuccessBlock)(void);
 
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         if ([self isTransResotred:transaction]) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [self didVerifyTransaction:transaction queue:queue];
-            });
+            [self didVerifyTransaction:transaction queue:queue];
 
             return;
         }
@@ -686,9 +684,7 @@ typedef void (^XYStoreSuccessBlock)(void);
     NSLog(@"transaction restored with product %@", transaction.originalTransaction.payment.productIdentifier);
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         if ([self isTransResotred:transaction]) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [self didVerifyTransaction:transaction queue:queue];
-            });
+            [self didVerifyTransaction:transaction queue:queue];
             return;
         }
 
@@ -757,7 +753,9 @@ typedef void (^XYStoreSuccessBlock)(void);
 
     XYAddPaymentParameters *wrapper = [self popAddPaymentParametersForIdentifier:productIdentifier];
     if (wrapper.successBlock != nil) {
-        wrapper.successBlock(transaction);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            wrapper.successBlock(transaction);
+        });
     }
 
     if (transaction.transactionState == SKPaymentTransactionStatePurchased) {
