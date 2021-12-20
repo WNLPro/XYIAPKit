@@ -635,20 +635,20 @@ typedef void (^XYStoreSuccessBlock)(void);
                 [self.receiptVerifier verifyTransaction:transaction success:^{
                     dispatch_async(dispatch_get_main_queue(), ^{
                                        [self didVerifyTransaction:transaction queue:queue];
+                                       dispatch_semaphore_signal(self.semoPhoreProcess);
                                    });
-                    dispatch_semaphore_signal(self.semoPhoreProcess);
                 } failure:^(NSError *error) {
                     dispatch_async(dispatch_get_main_queue(), ^{
                                        [self didFailTransaction:transaction queue:queue error:error];
+                                       dispatch_semaphore_signal(self.semoPhoreProcess);
                                    });
-                    dispatch_semaphore_signal(self.semoPhoreProcess);
                 }];
             } else {
                 NSLog(@"WARNING: no receipt verification");
                 dispatch_async(dispatch_get_main_queue(), ^{
                     [self didVerifyTransaction:transaction queue:queue];
+                    dispatch_semaphore_signal(self.semoPhoreProcess);
                 });
-                dispatch_semaphore_signal(self.semoPhoreProcess);
             }
 
             dispatch_semaphore_wait(self.semoPhoreProcess, DISPATCH_TIME_FOREVER);
