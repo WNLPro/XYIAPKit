@@ -432,6 +432,7 @@ typedef void (^XYStoreSuccessBlock)(void);
 - (void)paymentQueue:(SKPaymentQueue *)queue updatedTransactions:(NSArray *)transactions
 {
     for (SKPaymentTransaction *transaction in transactions) {
+        NSLog(@"paymentQueue tran:%@, state: %@", transaction.payment, @(transaction.transactionState));
         switch (transaction.transactionState) {
             case SKPaymentTransactionStatePurchased:
                 [self didPurchaseTransaction:transaction queue:queue];
@@ -684,14 +685,16 @@ typedef void (^XYStoreSuccessBlock)(void);
 {
     NSLog(@"transaction restored with product %@", transaction.originalTransaction.payment.productIdentifier);
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        
+        self->_pendingRestoredTransactionsCount++;
+        
         if ([self isTransResotred:transaction]) {
             [self didVerifyTransaction:transaction queue:queue];
             return;
         }
 
         NSLog(@"verify restore trans: %@", transaction);
-        self->_pendingRestoredTransactionsCount++;
-
+        
         [self.cachedTrans addObject:[[XYCachedTransaction alloc] initWithTransaction:transaction queue:queue]];
         dispatch_semaphore_signal(self.semoPhore);
     });
@@ -747,6 +750,7 @@ typedef void (^XYStoreSuccessBlock)(void);
 
 - (void)finishTransaction:(SKPaymentTransaction *)transaction queue:(SKPaymentQueue *)queue
 {
+    NSLog(@"finishTransaction :%@", transaction);
     SKPayment *payment = transaction.payment;
     NSString *productIdentifier = payment.productIdentifier;
     [self.transactionPersistor persistTransaction:transaction];
