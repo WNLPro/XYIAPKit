@@ -36,6 +36,10 @@ NSString *const XYStoreTransactionsUserDefaultsKey = @"XYStoreTransactions";
     NSArray *transactions = purchases[productIdentifier] ? : @[];
     NSMutableArray *updatedTransactions = [NSMutableArray arrayWithArray:transactions];
 
+    if ([self hasResotredTrans:paymentTransaction]) {
+        return;
+    }
+
     XYStoreTransaction *transaction = [[XYStoreTransaction alloc] initWithPaymentTransaction:paymentTransaction];
     NSData *data = [self dataWithTransaction:transaction];
     [updatedTransactions addObject:data];
