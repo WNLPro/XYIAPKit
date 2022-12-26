@@ -689,7 +689,9 @@ typedef void (^XYStoreSuccessBlock)(void);
         self->_pendingRestoredTransactionsCount++;
         
         if ([self isTransResotred:transaction]) {
-            [self didVerifyTransaction:transaction queue:queue];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self didVerifyTransaction:transaction queue:queue];
+            });
             return;
         }
 
