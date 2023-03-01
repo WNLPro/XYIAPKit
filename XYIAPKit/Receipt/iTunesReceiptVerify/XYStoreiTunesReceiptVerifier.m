@@ -67,6 +67,24 @@ NSString *const XYCachePreferenceKeyPrefix = @"xy_cache_pre_key_prefix";
     return [self checkIsSubscribed:iTunesResponse productId:productId];
 }
 
+- (NSDate *)subscribeExpireDate:(NSString *)productId {
+    XYiTunesResponse *iTunesResponse = [self iTunesResponseInfoWithProductId:productId applicationUsername:nil];
+    NSDate *expires_date;
+    for (XYInAppReceipt *appReceipt in iTunesResponse.latest_receipt_info) {
+        
+        if ([appReceipt.product_id isEqualToString:productId] == NO) {
+            continue;
+        }
+        
+        if (expires_date) {
+            expires_date = [expires_date laterDate:appReceipt.expires_date];
+        }else {
+            expires_date = appReceipt.expires_date;
+        }
+    }
+    return expires_date;
+}
+
 - (BOOL)checkIsSubscribed:(XYiTunesResponse *)iTunesResponse productId:(NSString *)productId
 {
     NSDate *expires_date;

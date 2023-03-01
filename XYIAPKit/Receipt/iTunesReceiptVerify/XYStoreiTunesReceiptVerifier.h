@@ -42,6 +42,8 @@
  */
 - (BOOL)isSubscribedWithAutoRenewProduct:(NSString *)productId applicationUsername:(NSString *)applicationUsername;
 
+- (NSDate *)subscribeExpireDate:(NSString *)productId;
+
 /**
  针对持续有效的产品，Apple返回的票据记录中会一直保留其票据信息，可以通过票据记录判断是否有效
  支持：1、非续期订阅 2、非消耗型项目
